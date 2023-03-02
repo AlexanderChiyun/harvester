@@ -132,7 +132,6 @@ func (h *Handler) OnBackupChange(key string, vmBackup *harvesterv1.VirtualMachin
 		return nil, h.handleBackupReady(vmBackup)
 	}
 
-	logrus.Debugf("OnBackupChange: vmBackup name:%s", vmBackup.Name)
 	// set vmBackup init status
 	if isBackupMissingStatus(vmBackup) {
 		// We cannot get VM outside this block, because we also can sync VMBackup from remote target.

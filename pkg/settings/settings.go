@@ -44,7 +44,7 @@ var (
 	OvercommitConfig        = NewSetting(OvercommitConfigSettingName, `{"cpu":1600,"memory":150,"storage":200}`)
 	VipPools                = NewSetting(VipPoolsConfigSettingName, "")
 	AutoDiskProvisionPaths  = NewSetting("auto-disk-provision-paths", "")
-	CSIDriverConfig         = NewSetting(CSIDriverConfigSettingName, `{"driver.longhorn.io":{"volumeSnapshotClassName":"longhorn-snapshot","backupVolumeSnapshotClassName":"longhorn"}}`)
+	CSIDriverConfig         = NewSetting(CSIDriverConfigSettingName, `{"driver.longhorn.io":{"volumeSnapshotClassName":"longhorn-snapshot","backupVolumeSnapshotClassName":"longhorn"},"rook-ceph.rbd.csi.ceph.com":{"volumeSnapshotClassName":"csi-rbdplugin-snapclass","backupVolumeSnapshotClassName":"csi-rbdplugin-snapclass"}}`)
 	ContainerdRegistry      = NewSetting(ContainerdRegistrySettingName, "")
 	StorageNetwork          = NewSetting(StorageNetworkName, "")
 
