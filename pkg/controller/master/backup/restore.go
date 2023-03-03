@@ -160,9 +160,9 @@ func (h *RestoreHandler) RestoreOnChanged(key string, restore *harvesterv1.Virtu
 	}
 
 	if isVMRestoreMissingVolumes(restore) {
-		if err := h.mountLonghornVolumes(backup); err != nil {
-			return nil, h.updateStatusError(restore, err, true)
-		}
+		//if err := h.mountLonghornVolumes(backup); err != nil {
+		//	return nil, h.updateStatusError(restore, err, true)
+		//}
 		return nil, h.initVolumesStatus(restore, backup)
 	}
 
