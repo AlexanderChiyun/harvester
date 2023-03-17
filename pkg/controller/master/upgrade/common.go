@@ -56,6 +56,13 @@ func setNodeUpgradeStatus(upgrade *harvesterv1.Upgrade, nodeName string, state, 
 	}
 }
 
+func setLogReadyCondition(upgrade *harvesterv1.Upgrade, status corev1.ConditionStatus, reason, message string) {
+	harvesterv1.LogReady.SetStatus(upgrade, string(status))
+	harvesterv1.LogReady.Reason(upgrade, reason)
+	harvesterv1.LogReady.Message(upgrade, message)
+	markComplete(upgrade)
+}
+
 func setImageReadyCondition(upgrade *harvesterv1.Upgrade, status corev1.ConditionStatus, reason, message string) {
 	harvesterv1.ImageReady.SetStatus(upgrade, string(status))
 	harvesterv1.ImageReady.Reason(upgrade, reason)
@@ -116,6 +123,24 @@ func markComplete(upgrade *harvesterv1.Upgrade) {
 		harvesterv1.SystemServicesUpgraded.IsFalse(upgrade) || harvesterv1.NodesUpgraded.IsFalse(upgrade) {
 		harvesterv1.UpgradeCompleted.False(upgrade)
 		upgrade.Labels[upgradeStateLabel] = StateFailed
+	}
+}
+
+func prepareUpgradeLog(upgrade *harvesterv1.Upgrade) *harvesterv1.UpgradeLog {
+	return &harvesterv1.UpgradeLog{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name.SafeConcatName(upgrade.Name, "upgradelog"),
+			Namespace: upgradeNamespace,
+			Labels: map[string]string{
+				harvesterUpgradeLabel: upgrade.Name,
+			},
+			OwnerReferences: []metav1.OwnerReference{
+				upgradeReference(upgrade),
+			},
+		},
+		Spec: harvesterv1.UpgradeLogSpec{
+			UpgradeName: upgrade.Name,
+		},
 	}
 }
 
@@ -390,40 +415,6 @@ func getDefaultTolerations() []corev1.Toleration {
 	}
 }
 
-const (
-	testJobName      = "test-job"
-	testPlanName     = "test-plan"
-	testNodeName     = "test-node"
-	testUpgradeName  = "test-upgrade"
-	testVersion      = "test-version"
-	testUpgradeImage = "test-upgrade-image"
-	testPlanHash     = "test-hash"
-)
-
-func newTestNodeJobBuilder() *jobBuilder {
-	return newJobBuilder(testJobName).
-		WithLabel(upgradePlanLabel, testPlanName).
-		WithLabel(upgradeNodeLabel, testNodeName)
-}
-
-func newTestPlanBuilder() *planBuilder {
-	return newPlanBuilder(testPlanName).
-		Version(testVersion).
-		WithLabel(harvesterUpgradeLabel, testUpgradeName).
-		Hash(testPlanHash)
-}
-
-func newTestChartJobBuilder() *jobBuilder {
-	return newJobBuilder(testJobName).
-		WithLabel(harvesterUpgradeComponentLabel, manifestComponent)
-}
-
-func newTestUpgradeBuilder() *upgradeBuilder {
-	return newUpgradeBuilder(testUpgradeName).
-		WithLabel(harvesterLatestUpgradeLabel, "true").
-		Version(testVersion)
-}
-
 type jobBuilder struct {
 	job *batchv1.Job
 }
@@ -507,6 +498,11 @@ func (p *upgradeBuilder) WithAnnotation(key, value string) *upgradeBuilder {
 	return p
 }
 
+func (p *upgradeBuilder) WithLogEnabled(value bool) *upgradeBuilder {
+	p.upgrade.Spec.LogEnabled = value
+	return p
+}
+
 func (p *upgradeBuilder) WithImage(image string) *upgradeBuilder {
 	p.upgrade.Spec.Image = fmt.Sprintf("%s/%s", upgradeNamespace, image)
 	return p
@@ -514,6 +510,11 @@ func (p *upgradeBuilder) WithImage(image string) *upgradeBuilder {
 
 func (p *upgradeBuilder) Version(version string) *upgradeBuilder {
 	p.upgrade.Spec.Version = version
+	return p
+}
+
+func (p *upgradeBuilder) LogReadyCondition(status corev1.ConditionStatus, reason, message string) *upgradeBuilder {
+	setLogReadyCondition(p.upgrade, status, reason, message)
 	return p
 }
 
@@ -534,6 +535,11 @@ func (p *upgradeBuilder) NodeUpgradeStatus(nodeName string, state, reason, messa
 
 func (p *upgradeBuilder) ImageIDStatus(imageName string) *upgradeBuilder {
 	p.upgrade.Status.ImageID = imageName
+	return p
+}
+
+func (p *upgradeBuilder) UpgradeLogStatus(upgradeLogName string) *upgradeBuilder {
+	p.upgrade.Status.UpgradeLog = upgradeLogName
 	return p
 }
 

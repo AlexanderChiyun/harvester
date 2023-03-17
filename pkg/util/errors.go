@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
+	"os"
 	"syscall"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -36,11 +36,20 @@ func NewStillExists(qualifiedResource schema.GroupResource, name string) *apierr
 	}
 }
 
-func IsConnectionRefusedOrTimeout(err error) bool {
-	urlErr := err.(*url.Error)
-	if urlErr.Timeout() {
+func IsRetriableNetworkError(err error) bool {
+	if os.IsTimeout(err) {
+		return true
+	} else if errors.Is(err, syscall.ENETDOWN) {
+		return true
+	} else if errors.Is(err, syscall.ENETUNREACH) {
+		return true
+	} else if errors.Is(err, syscall.ECONNRESET) {
+		return true
+	} else if errors.Is(err, syscall.ETIMEDOUT) {
 		return true
 	} else if errors.Is(err, syscall.ECONNREFUSED) {
+		return true
+	} else if errors.Is(err, syscall.EHOSTUNREACH) {
 		return true
 	} else {
 		return false

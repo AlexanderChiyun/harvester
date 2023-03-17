@@ -19,11 +19,61 @@ import (
 	"github.com/harvester/harvester/pkg/util/fakeclients"
 )
 
+const (
+	testJobName        = "test-job"
+	testPlanName       = "test-plan"
+	testNodeName       = "test-node"
+	testUpgradeName    = "test-upgrade"
+	testUpgradeLogName = "test-upgrade-upgradelog"
+	testVersion        = "test-version"
+	testUpgradeImage   = "test-upgrade-image"
+	testPlanHash       = "test-hash"
+)
+
+func newTestNodeJobBuilder() *jobBuilder {
+	return newJobBuilder(testJobName).
+		WithLabel(upgradePlanLabel, testPlanName).
+		WithLabel(upgradeNodeLabel, testNodeName)
+}
+
+func newTestPlanBuilder() *planBuilder {
+	return newPlanBuilder(testPlanName).
+		Version(testVersion).
+		WithLabel(harvesterUpgradeLabel, testUpgradeName).
+		Hash(testPlanHash)
+}
+
+func newTestChartJobBuilder() *jobBuilder {
+	return newJobBuilder(testJobName).
+		WithLabel(harvesterUpgradeComponentLabel, manifestComponent)
+}
+
+func newTestUpgradeBuilder() *upgradeBuilder {
+	return newUpgradeBuilder(testUpgradeName).
+		WithLabel(harvesterLatestUpgradeLabel, "true").
+		Version(testVersion)
+}
+
 func newTestExistingVirtualMachineImage(namespace, name string) *harvesterv1.VirtualMachineImage {
 	return &harvesterv1.VirtualMachineImage{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: namespace,
 			Name:      name,
+		},
+	}
+}
+
+func newTestUpgradeLog() *harvesterv1.UpgradeLog {
+	return &harvesterv1.UpgradeLog{
+		ObjectMeta: metav1.ObjectMeta{
+			Labels: map[string]string{
+				harvesterUpgradeLabel: testUpgradeName,
+			},
+			Name:      testUpgradeLogName,
+			Namespace: harvesterSystemNamespace,
+		},
+		Spec: harvesterv1.UpgradeLogSpec{
+			UpgradeName: testUpgradeName,
 		},
 	}
 }
@@ -45,10 +95,11 @@ func TestUpgradeHandler_OnChanged(t *testing.T) {
 		nodes   []*v1.Node
 	}
 	type output struct {
-		plan    *upgradeapiv1.Plan
-		upgrade *harvesterv1.Upgrade
-		vmi     *harvesterv1.VirtualMachineImage
-		err     error
+		plan       *upgradeapiv1.Plan
+		upgrade    *harvesterv1.Upgrade
+		upgradeLog *harvesterv1.UpgradeLog
+		vmi        *harvesterv1.VirtualMachineImage
+		err        error
 	}
 	var testCases = []struct {
 		name     string
@@ -56,10 +107,42 @@ func TestUpgradeHandler_OnChanged(t *testing.T) {
 		expected output
 	}{
 		{
-			name: "upgrade triggers an image creation from ISOURL",
+			name: "new upgrade with log disabled",
 			given: input{
 				key:     testUpgradeName,
-				upgrade: newTestUpgradeBuilder().Build(),
+				upgrade: newTestUpgradeBuilder().WithLogEnabled(false).Build(),
+				version: newVersionBuilder(testVersion).Build(),
+				vmi:     newTestExistingVirtualMachineImage(upgradeNamespace, testUpgradeImage),
+			},
+			expected: output{
+				upgrade: newTestUpgradeBuilder().InitStatus().
+					WithLabel(upgradeStateLabel, StateLoggingInfraPrepared).
+					LogReadyCondition(v1.ConditionFalse, "Disabled", "Upgrade observability is administratively disabled").Build(),
+			},
+		},
+		{
+			name: "new upgrade with log enabled",
+			given: input{
+				key:     testUpgradeName,
+				upgrade: newTestUpgradeBuilder().WithLogEnabled(true).Build(),
+				version: newVersionBuilder(testVersion).Build(),
+				vmi:     newTestExistingVirtualMachineImage(upgradeNamespace, testUpgradeImage),
+			},
+			expected: output{
+				upgradeLog: prepareUpgradeLog(newTestUpgradeBuilder().Build()),
+				upgrade: newTestUpgradeBuilder().WithLogEnabled(true).InitStatus().
+					WithLabel(upgradeStateLabel, StatePreparingLoggingInfra).
+					UpgradeLogStatus(testUpgradeLogName).
+					LogReadyCondition(v1.ConditionUnknown, "", "").Build(),
+			},
+		},
+		{
+			name: "upgrade triggers an image creation from ISOURL",
+			given: input{
+				key: testUpgradeName,
+				upgrade: newTestUpgradeBuilder().
+					InitStatus().
+					LogReadyCondition(v1.ConditionFalse, "Disabled", "Upgrade observability is administratively disabled").Build(),
 				version: newVersionBuilder(testVersion).Build(),
 				vmi:     newTestExistingVirtualMachineImage(upgradeNamespace, testUpgradeImage),
 				nodes: []*v1.Node{
@@ -71,14 +154,17 @@ func TestUpgradeHandler_OnChanged(t *testing.T) {
 			expected: output{
 				vmi: newTestVirtualMachineImage(),
 				upgrade: newTestUpgradeBuilder().InitStatus().
+					LogReadyCondition(v1.ConditionFalse, "Disabled", "Upgrade observability is administratively disabled").
 					ImageReadyCondition(v1.ConditionUnknown, "", "").Build(),
 			},
 		},
 		{
 			name: "upgrade with an existing image",
 			given: input{
-				key:     testUpgradeName,
-				upgrade: newTestUpgradeBuilder().WithImage(testUpgradeImage).Build(),
+				key: testUpgradeName,
+				upgrade: newTestUpgradeBuilder().WithImage(testUpgradeImage).
+					InitStatus().
+					LogReadyCondition(v1.ConditionFalse, "Disabled", "Upgrade observability is administratively disabled").Build(),
 				version: newVersionBuilder(testVersion).Build(),
 				vmi:     newTestExistingVirtualMachineImage(upgradeNamespace, testUpgradeImage),
 				nodes: []*v1.Node{
@@ -89,6 +175,7 @@ func TestUpgradeHandler_OnChanged(t *testing.T) {
 			},
 			expected: output{
 				upgrade: newTestUpgradeBuilder().InitStatus().
+					LogReadyCondition(v1.ConditionFalse, "Disabled", "Upgrade observability is administratively disabled").
 					WithImage(testUpgradeImage).
 					ImageIDStatus(fmt.Sprintf("%s/%s", upgradeNamespace, testUpgradeImage)).
 					ImageReadyCondition(v1.ConditionUnknown, "", "").Build(),
@@ -103,15 +190,16 @@ func TestUpgradeHandler_OnChanged(t *testing.T) {
 		}
 		var k8sclientset = k8sfake.NewSimpleClientset(nodes...)
 		var handler = &upgradeHandler{
-			namespace:     harvesterSystemNamespace,
-			nodeCache:     fakeclients.NodeCache(k8sclientset.CoreV1().Nodes),
-			planClient:    fakeclients.PlanClient(clientset.UpgradeV1().Plans),
-			upgradeClient: fakeclients.UpgradeClient(clientset.HarvesterhciV1beta1().Upgrades),
-			upgradeCache:  fakeclients.UpgradeCache(clientset.HarvesterhciV1beta1().Upgrades),
-			versionCache:  fakeclients.VersionCache(clientset.HarvesterhciV1beta1().Versions),
-			vmClient:      fakeclients.VirtualMachineClient(clientset.KubevirtV1().VirtualMachines),
-			vmImageClient: fakeclients.VirtualMachineImageClient(clientset.HarvesterhciV1beta1().VirtualMachineImages),
-			vmImageCache:  fakeclients.VirtualMachineImageCache(clientset.HarvesterhciV1beta1().VirtualMachineImages),
+			namespace:        harvesterSystemNamespace,
+			nodeCache:        fakeclients.NodeCache(k8sclientset.CoreV1().Nodes),
+			planClient:       fakeclients.PlanClient(clientset.UpgradeV1().Plans),
+			upgradeClient:    fakeclients.UpgradeClient(clientset.HarvesterhciV1beta1().Upgrades),
+			upgradeCache:     fakeclients.UpgradeCache(clientset.HarvesterhciV1beta1().Upgrades),
+			upgradeLogClient: fakeclients.UpgradeLogClient(clientset.HarvesterhciV1beta1().UpgradeLogs),
+			versionCache:     fakeclients.VersionCache(clientset.HarvesterhciV1beta1().Versions),
+			vmClient:         fakeclients.VirtualMachineClient(clientset.KubevirtV1().VirtualMachines),
+			vmImageClient:    fakeclients.VirtualMachineImageClient(clientset.HarvesterhciV1beta1().VirtualMachineImages),
+			vmImageCache:     fakeclients.VirtualMachineImageCache(clientset.HarvesterhciV1beta1().VirtualMachineImages),
 		}
 		var actual output
 		actual.upgrade, actual.err = handler.OnChanged(tc.given.key, tc.given.upgrade)
@@ -148,6 +236,74 @@ func TestUpgradeHandler_OnChanged(t *testing.T) {
 			}
 
 			assert.Equal(t, tc.expected.upgrade, actual.upgrade, "case %q", tc.name)
+		}
+
+		if tc.expected.upgradeLog != nil {
+			var err error
+			actual.upgradeLog, err = handler.upgradeLogClient.Get(upgradeNamespace, tc.expected.upgradeLog.Name, metav1.GetOptions{})
+			assert.Nil(t, err)
+
+			assert.Equal(t, tc.expected.upgradeLog, actual.upgradeLog, "case %q", tc.name)
+		}
+	}
+}
+
+func Test_isVersionUpgradable(t *testing.T) {
+	var testCases = []struct {
+		name                 string
+		currentVersion       string
+		minUpgradableVersion string
+		isUpgradable         bool
+	}{
+		{
+			name:                 "upgrade from versions above the minimal requirement",
+			currentVersion:       "v1.1.1",
+			minUpgradableVersion: "v1.1.0",
+			isUpgradable:         true,
+		},
+		{
+			name:                 "upgrade from the exact version of the minimal requirement",
+			currentVersion:       "v1.1.0",
+			minUpgradableVersion: "v1.1.0",
+			isUpgradable:         true,
+		},
+		{
+			name:                 "upgrade from rc versions lower than the minimal requirement",
+			currentVersion:       "v1.1.0-rc1",
+			minUpgradableVersion: "v1.1.0",
+			isUpgradable:         false,
+		},
+		{
+			name:                 "upgrade from rc versions above the minimal requirement (rc minUpgradableVersion)",
+			currentVersion:       "v1.1.0-rc2",
+			minUpgradableVersion: "v1.1.0-rc1",
+			isUpgradable:         true,
+		},
+		{
+			name:                 "upgrade from rc versions lower than the minimal requirement (rc minUpgradableVersion)",
+			currentVersion:       "v1.1.0-rc1",
+			minUpgradableVersion: "v1.1.0-rc2",
+			isUpgradable:         false,
+		},
+		{
+			name:                 "upgrade from the exact rc version of the minimal requirement (rc minUpgradableVersion)",
+			currentVersion:       "v1.1.0-rc1",
+			minUpgradableVersion: "v1.1.0-rc1",
+			isUpgradable:         true,
+		},
+		{
+			name:                 "upgrade from versions lower than the minimal requirement",
+			currentVersion:       "v1.0.3",
+			minUpgradableVersion: "v1.1.0",
+			isUpgradable:         false,
+		},
+	}
+	for _, tc := range testCases {
+		err := isVersionUpgradable(tc.currentVersion, tc.minUpgradableVersion)
+		if tc.isUpgradable {
+			assert.Nil(t, err, "case %q", tc.name)
+		} else {
+			assert.NotNil(t, err, "case %q", tc.name)
 		}
 	}
 }

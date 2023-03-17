@@ -6583,6 +6583,10 @@
           "type": "string",
           "default": ""
         },
+        "logEnabled": {
+          "type": "boolean",
+          "default": false
+        },
         "version": {
           "type": "string",
           "default": ""
@@ -6616,6 +6620,9 @@
           "type": "string"
         },
         "singleNode": {
+          "type": "string"
+        },
+        "upgradeLog": {
           "type": "string"
         }
       }
