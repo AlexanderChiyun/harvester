@@ -44,9 +44,10 @@ var (
 	OvercommitConfig        = NewSetting(OvercommitConfigSettingName, `{"cpu":1600,"memory":150,"storage":200}`)
 	VipPools                = NewSetting(VipPoolsConfigSettingName, "")
 	AutoDiskProvisionPaths  = NewSetting("auto-disk-provision-paths", "")
-	CSIDriverConfig         = NewSetting(CSIDriverConfigSettingName, `{"driver.longhorn.io":{"volumeSnapshotClassName":"longhorn-snapshot","backupVolumeSnapshotClassName":"longhorn"}}`)
-	ContainerdRegistry      = NewSetting(ContainerdRegistrySettingName, "")
-	StorageNetwork          = NewSetting(StorageNetworkName, "")
+	//CSIDriverConfig         = NewSetting(CSIDriverConfigSettingName, `{"driver.longhorn.io":{"volumeSnapshotClassName":"longhorn-snapshot","backupVolumeSnapshotClassName":"longhorn"}}`)
+	CSIDriverConfig    = NewSetting(CSIDriverConfigSettingName, `{"driver.longhorn.io":{"volumeSnapshotClassName":"longhorn-snapshot","backupVolumeSnapshotClassName":"longhorn"},"rook-ceph.rbd.csi.ceph.com":{"volumeSnapshotClassName":"csi-rbdplugin-snapclass","backupVolumeSnapshotClassName":"csi-rbdplugin-snapclass"}}`)
+	ContainerdRegistry = NewSetting(ContainerdRegistrySettingName, "")
+	StorageNetwork     = NewSetting(StorageNetworkName, "")
 
 	// HarvesterCSICCMVersion this is the chart version from https://github.com/harvester/charts instead of image versions
 	HarvesterCSICCMVersion = NewSetting(HarvesterCSICCMSettingName, `{"harvester-cloud-provider":">=0.0.1 <0.1.14","harvester-csi-provider":">=0.0.1 <0.1.15"}`)
