@@ -1,14 +1,11 @@
 package image
 
 import (
-	"fmt"
 	"io"
-	"io/ioutil"
+	"fmt"
+        "time"
 	"net/http"
-	"net/url"
 	"reflect"
-	"time"
-
 	"github.com/gorilla/mux"
 	lhv1beta1 "github.com/longhorn/longhorn-manager/k8s/pkg/apis/longhorn/v1beta1"
 	"github.com/pkg/errors"
@@ -18,11 +15,11 @@ import (
 	"github.com/sirupsen/logrus"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	apisv1beta1 "github.com/harvester/harvester/pkg/apis/harvesterhci.io/v1beta1"
 	"github.com/harvester/harvester/pkg/generated/controllers/harvesterhci.io/v1beta1"
 	ctllhv1beta1 "github.com/harvester/harvester/pkg/generated/controllers/longhorn.io/v1beta1"
 	"github.com/harvester/harvester/pkg/util"
+	"mime/multipart"
 )
 
 const (
@@ -97,94 +94,103 @@ func (h ImageHandler) downloadImage(rw http.ResponseWriter, req *http.Request) e
 	name := vars["name"]
 	vmImage, err := h.Images.Get(namespace, name, metav1.GetOptions{})
 	if err != nil {
-		return fmt.Errorf("Failed to get VMImage with name(%s), ns(%s), error: %w", name, namespace, err)
+		return fmt.Errorf("failed to get VMImage with name(%s), ns(%s), error: %w", name, namespace, err)
 	}
 
-	targetFileName := vmImage.Spec.DisplayName
-	bkimgName := fmt.Sprintf("%s-%s", namespace, name)
-	downloadUrl := fmt.Sprintf("%s/backingimages/%s/download", util.LonghornDefaultManagerURL, bkimgName)
-	downloadReq, err := http.NewRequestWithContext(req.Context(), http.MethodGet, downloadUrl, nil)
-	if err != nil {
-		return fmt.Errorf("Failed to create the download request with backing Image(%s): %w", bkimgName, err)
-	}
+	imgName := vmImage.Annotations["harvesterhci.io/image-name"]
+	objName := fmt.Sprintf("%s-%s-%s", namespace, name, imgName)
 
-	downloadResp, err := h.httpClient.Do(downloadReq)
-	if err != nil {
-		return fmt.Errorf("Failed to send the download request with backing Image(%s): %w", bkimgName, err)
+	obj, err := util.GetObject(util.DefaultBucket, objName)
+    if err != nil {
+		logrus.Debug("Download image error:", err)
+		return err
 	}
-	defer downloadResp.Body.Close()
+    defer obj.Close()
 
-	if downloadResp.StatusCode != http.StatusOK {
-		return fmt.Errorf("Failed with unexpected http Status code %d.", downloadResp.StatusCode)
-	}
+	rw.Header().Set("Content-Disposition", "attachment; filename="+imgName)
+	rw.Header().Set("Content-Type", "multipart/form-data")
 
-	rw.Header().Set("Content-Disposition", "attachment; filename="+targetFileName)
-	contentType := downloadResp.Header.Get("Content-Type")
-	if contentType != "" {
-		rw.Header().Set("Content-Type", contentType)
-	}
-
-	if _, err := io.Copy(rw, downloadResp.Body); err != nil {
-		return fmt.Errorf("Failed to copy download content to target(%s), err: %w", targetFileName, err)
+	if _, err := io.Copy(rw, obj); err != nil {
+		return fmt.Errorf("failed to copy download content to target(%s), err: %w", objName, err)
 	}
 
 	return nil
 }
 
 func (h ImageHandler) uploadImage(rw http.ResponseWriter, req *http.Request) error {
+	// action:upload name:image-xxxxx namespace:default type:harvesterhci.io.virtualmachineimages
 	vars := mux.Vars(req)
 	namespace := vars["namespace"]
 	name := vars["name"]
 	image, err := h.Images.Get(namespace, name, metav1.GetOptions{})
+
+	reader, err := req.MultipartReader()
 	if err != nil {
 		return err
 	}
 
-	defer func() {
-		if err != nil {
-			if updateErr := h.updateImportedConditionOnConflict(image, "False", "UploadFailed", err.Error()); updateErr != nil {
-				logrus.Error(err)
-			}
+	var imgPart *multipart.Part
+
+	for {
+		if imgPart, err = reader.NextPart(); err != nil {
+			return err
 		}
-	}()
-
-	//Wait for backing image data source to be ready. Otherwise the upload request will fail.
-	dsName := fmt.Sprintf("%s-%s", namespace, name)
-	if err := h.waitForBackingImageDataSourceReady(dsName); err != nil {
-		return err
+		break
 	}
 
-	uploadUrl := fmt.Sprintf("%s/backingimages/%s-%s", util.LonghornDefaultManagerURL, namespace, name)
-	uploadReq, err := http.NewRequestWithContext(req.Context(), http.MethodPost, uploadUrl, req.Body)
+	objName := fmt.Sprintf("%s-%s-%s", namespace, name, imgPart.FileName()) // default|image-7wtcd|cirros-qcow2.img
+	info, err := util.PutObject(util.DefaultBucket, objName, imgPart)
 	if err != nil {
-		return fmt.Errorf("failed to create the upload request: %w", err)
-	}
-	uploadReq.Header = req.Header
-	uploadReq.URL.RawQuery = req.URL.RawQuery
-
-	var urlErr *url.Error
-	uploadResp, err := h.httpClient.Do(uploadReq)
-	if errors.As(err, &urlErr) {
-		// Trim the "POST http://xxx" implementation detail for the error
-		// set the err var and it will be recorded in image condition in the defer function
-		err = errors.Unwrap(urlErr)
+		logrus.Debug("Upload image error:", err)
 		return err
-	} else if err != nil {
-		return fmt.Errorf("failed to send the upload request: %w", err)
 	}
-	defer uploadResp.Body.Close()
+	logrus.Debug(info)
 
-	body, err := ioutil.ReadAll(uploadResp.Body)
+	err = h.updateStatusOnConflict(image, 100, info.Size, info.Location)
 	if err != nil {
-		return fmt.Errorf("failed to read response body: %w", err)
-	}
-	if uploadResp.StatusCode >= http.StatusBadRequest {
-		// err will be recorded in image condition in the defer function
-		err = fmt.Errorf("upload failed: %s", string(body))
+		logrus.Debug("Upate status err:", err)
 		return err
 	}
 
+	storageClass := image.Annotations["harvesterhci.io/storageClassName"]
+	dvName := fmt.Sprintf("%s-%s", namespace, name)
+
+	if err = util.CreateDataVolume(namespace, dvName, storageClass, info.Location);err != nil {
+		logrus.Debug("Create DV error:", err)
+		return err
+	}
 	return nil
+}
+
+func (h ImageHandler) updateStatusOnConflict(image *apisv1beta1.VirtualMachineImage, progress int, size int64, location string) error {
+	retry := 3
+	for i := 0; i < retry; i++ {
+		current, err := h.ImageCache.Get(image.Namespace, image.Name)
+		if err != nil {
+			return err
+		}
+		if current.DeletionTimestamp != nil {
+			return nil
+		}
+
+		toUpdate := current.DeepCopy()
+		toUpdate.Status.Progress = progress
+		toUpdate.Status.Size = size
+		toUpdate.Annotations["harvesterhci.io/imageLocation"] = location
+
+		apisv1beta1.ImageImported.SetStatusBool(toUpdate, true)
+		apisv1beta1.ImageImported.Reason(toUpdate, "Imported")
+
+		if reflect.DeepEqual(current, toUpdate) {
+			return nil
+		}
+		_, err = h.Images.Update(toUpdate)
+		if err == nil || !apierrors.IsConflict(err) {
+			return err
+		}
+		time.Sleep(2 * time.Second)
+	}
+	return errors.New("failed to update image uploaded status, max retries exceeded")
 }
 
 func (h ImageHandler) waitForBackingImageDataSourceReady(name string) error {
@@ -233,3 +239,4 @@ func (h ImageHandler) updateImportedConditionOnConflict(image *apisv1beta1.Virtu
 	}
 	return errors.New("failed to update image uploaded condition, max retries exceeded")
 }
+
