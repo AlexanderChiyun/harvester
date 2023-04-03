@@ -17,24 +17,18 @@ const (
 
 var DefaultMod = corev1.PersistentVolumeBlock
 
-var gCDICli *cdi.Clientset
-
-func initCDICli() error {
-    if gCDICli != nil {
-        return nil
-    }
+func initCDICli() (*cdi.Clientset, error) {
     config, err := rest.InClusterConfig()
     if err != nil {
         logrus.Errorf("InClusterConfig failed: %v", err)
-        return err
+        return nil, err
     }
     client, err := cdi.NewForConfig(config)
     if err != nil {
         logrus.Errorf("NewForConfig failed: %v", err)
-        return err
+        return nil, err
     }
-    gCDICli = client
-    return nil
+    return client, nil
 }
 
 func CreateDataVolume(namespace, name, storageclass, imgurl string) error {
@@ -63,19 +57,21 @@ func CreateDataVolume(namespace, name, storageclass, imgurl string) error {
         },
     }
 
-    if err := initCDICli(); err != nil {
+    cli, err := initCDICli()
+    if err != nil {
         logrus.Errorf("Init CDI client failed.")
         return err
     }
-    _, err := gCDICli.CdiV1beta1().DataVolumes(namespace).Create(context.Background(), newdv, metav1.CreateOptions{})
+    _, err = cli.CdiV1beta1().DataVolumes(namespace).Create(context.Background(), newdv, metav1.CreateOptions{})
     return err
 }
 
 func DeleteDataVolume(namespace string, name string, storageclass string) error {
-    if err := initCDICli(); err != nil {
+    cli, err := initCDICli()
+    if err != nil {
         logrus.Errorf("Init CDI client failed.")
         return err
     }
-    err := gCDICli.CdiV1beta1().DataVolumes(namespace).Delete(context.Background(), name, metav1.DeleteOptions{})
-    return err
+    return cli.CdiV1beta1().DataVolumes(namespace).Delete(context.Background(), name, metav1.DeleteOptions{})
 }
+
