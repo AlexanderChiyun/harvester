@@ -2,25 +2,16 @@ package image
 
 import (
 	"fmt"
+	"github.com/sirupsen/logrus"
 	"net/http"
-
-	lhcontroller "github.com/longhorn/longhorn-manager/controller"
-	"github.com/longhorn/longhorn-manager/k8s/pkg/apis/longhorn/v1beta1"
-	lhmanager "github.com/longhorn/longhorn-manager/manager"
-	"github.com/longhorn/longhorn-manager/types"
-	ctlcorev1 "github.com/rancher/wrangler/pkg/generated/controllers/core/v1"
-	ctlstoragev1 "github.com/rancher/wrangler/pkg/generated/controllers/storage/v1"
-	corev1 "k8s.io/api/core/v1"
-	storagev1 "k8s.io/api/storage/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/pointer"
 
 	harvesterv1 "github.com/harvester/harvester/pkg/apis/harvesterhci.io/v1beta1"
 	ctlharvesterv1 "github.com/harvester/harvester/pkg/generated/controllers/harvesterhci.io/v1beta1"
 	lhv1beta1 "github.com/harvester/harvester/pkg/generated/controllers/longhorn.io/v1beta1"
-	"github.com/harvester/harvester/pkg/ref"
 	"github.com/harvester/harvester/pkg/util"
+	ctlcorev1 "github.com/rancher/wrangler/pkg/generated/controllers/core/v1"
+	ctlstoragev1 "github.com/rancher/wrangler/pkg/generated/controllers/storage/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 )
 
 // vmImageHandler syncs status on vm image changes, and manage a storageclass & a backingimage per vm image
@@ -36,15 +27,14 @@ func (h *vmImageHandler) OnChanged(_ string, image *harvesterv1.VirtualMachineIm
 	if image == nil || image.DeletionTimestamp != nil {
 		return image, nil
 	}
+
 	if harvesterv1.ImageInitialized.GetStatus(image) == "" {
 		return h.initialize(image)
-	} else if image.Spec.URL != image.Status.AppliedURL {
+	}//else if image.Spec.URL != image.Status.AppliedURL {
 		// URL is changed, recreate the storageclass and backingimage
-		if err := h.deleteBackingImageAndStorageClass(image); err != nil {
-			return image, err
-		}
-		return h.initialize(image)
-	}
+		//return h.initialize(image)
+
+	//}
 
 	// sync display_name to labels in order to list by labelSelector
 	if image.Spec.DisplayName != image.Labels[util.LabelImageDisplayName] {
@@ -63,17 +53,65 @@ func (h *vmImageHandler) OnRemove(_ string, image *harvesterv1.VirtualMachineIma
 	if image == nil {
 		return nil, nil
 	}
-	scName := util.GetImageStorageClassName(image.Name)
-	if err := h.storageClasses.Delete(scName, &metav1.DeleteOptions{}); !errors.IsNotFound(err) && err != nil {
-		return image, err
+	namespace := image.Namespace
+	name := image.Name
+	storageClass := image.Annotations[util.AnnotationStorageClassName]
+	dvName := fmt.Sprintf("%s-%s", namespace, name)
+	if err := util.DeleteDataVolume(namespace, dvName, storageClass); err != nil {
+		if !errors.IsNotFound(err) {
+			logrus.Debug("Delete DV error:", err)
+			return nil, err
+		}
 	}
-	biName := util.GetBackingImageName(image)
-	if err := h.backingImages.Delete(util.LonghornSystemNamespaceName, biName, &metav1.DeleteOptions{}); !errors.IsNotFound(err) && err != nil {
-		return image, err
+
+	imageName := image.Annotations["harvesterhci.io/image-name"]
+	objName := fmt.Sprintf("%s-%s-%s", namespace, name, imageName)
+	if err := util.RemoveObject(util.DefaultBucket, objName); err != nil {
+		if !errors.IsNotFound(err) {
+			logrus.Debug("Delete image object error:", err)
+			return nil, err
+		}
 	}
 	return image, nil
 }
 
+func (h *vmImageHandler) initialize(image *harvesterv1.VirtualMachineImage) (*harvesterv1.VirtualMachineImage, error) {
+
+	toUpdate := image.DeepCopy()
+	toUpdate.Status.AppliedURL = toUpdate.Spec.URL
+	//toUpdate.Status.StorageClassName = util.GetImageStorageClassName(image.Name)
+
+	if image.Spec.SourceType == harvesterv1.VirtualMachineImageSourceTypeDownload {
+		resp, err := h.httpClient.Head(image.Spec.URL)
+		if err != nil {
+			harvesterv1.ImageInitialized.False(toUpdate)
+			harvesterv1.ImageInitialized.Message(toUpdate, err.Error())
+			return h.images.Update(toUpdate)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusBadRequest {
+			harvesterv1.ImageInitialized.False(toUpdate)
+			harvesterv1.ImageInitialized.Message(toUpdate, fmt.Sprintf("got %d status code from %s", resp.StatusCode, image.Spec.URL))
+			return h.images.Update(toUpdate)
+		}
+
+		if resp.ContentLength > 0 {
+			toUpdate.Status.Size = resp.ContentLength
+		}
+	} else {
+		toUpdate.Status.Progress = 0
+	}
+
+	harvesterv1.ImageImported.Unknown(toUpdate)
+	harvesterv1.ImageImported.Reason(toUpdate, "Importing")
+	harvesterv1.ImageInitialized.True(toUpdate)
+	harvesterv1.ImageInitialized.Reason(toUpdate, "Initialized")
+
+	return h.images.Update(toUpdate)
+}
+
+/*
 func (h *vmImageHandler) initialize(image *harvesterv1.VirtualMachineImage) (*harvesterv1.VirtualMachineImage, error) {
 	if err := h.createBackingImage(image); err != nil && !errors.IsAlreadyExists(err) {
 		return nil, err
@@ -115,6 +153,7 @@ func (h *vmImageHandler) initialize(image *harvesterv1.VirtualMachineImage) (*ha
 
 	return h.images.Update(toUpdate)
 }
+
 
 func (h *vmImageHandler) createBackingImage(image *harvesterv1.VirtualMachineImage) error {
 	bi := &v1beta1.BackingImage{
@@ -184,3 +223,4 @@ func (h *vmImageHandler) deleteBackingImageAndStorageClass(image *harvesterv1.Vi
 	}
 	return nil
 }
+*/

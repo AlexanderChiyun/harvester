@@ -141,10 +141,10 @@ func (h ImageHandler) uploadImage(rw http.ResponseWriter, req *http.Request) err
 	objName := fmt.Sprintf("%s-%s-%s", namespace, name, imgPart.FileName()) // default|image-7wtcd|cirros-qcow2.img
 	info, err := util.PutObject(util.DefaultBucket, objName, imgPart)
 	if err != nil {
-		logrus.Debug("Upload image error:", err)
+	        logrus.Debug("Upload image error:", err)
 		return err
 	}
-	logrus.Debug(info)
+        logrus.Debug("Put object success:", info.Location)
 
 	err = h.updateStatusOnConflict(image, 100, info.Size, info.Location)
 	if err != nil {
@@ -159,6 +159,8 @@ func (h ImageHandler) uploadImage(rw http.ResponseWriter, req *http.Request) err
 		logrus.Debug("Create DV error:", err)
 		return err
 	}
+        logrus.Debug("Create DV success:", dvName)
+
 	return nil
 }
 

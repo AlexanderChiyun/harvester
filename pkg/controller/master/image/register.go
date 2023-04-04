@@ -10,7 +10,7 @@ import (
 
 const (
 	vmImageControllerName      = "vm-image-controller"
-	backingImageControllerName = "backing-image-controller"
+	//backingImageControllerName = "backing-image-controller"
 )
 
 func Register(ctx context.Context, management *config.Management, options config.Options) error {
@@ -27,15 +27,17 @@ func Register(ctx context.Context, management *config.Management, options config
 		},
 		pvcCache: pvcs.Cache(),
 	}
+/*
 	backingImageHandler := &backingImageHandler{
 		vmImages:          images,
 		vmImageCache:      images.Cache(),
 		backingImages:     backingImages,
 		backingImageCache: backingImages.Cache(),
 	}
+*/
 	images.OnChange(ctx, vmImageControllerName, vmImageHandler.OnChanged)
 	images.OnRemove(ctx, vmImageControllerName, vmImageHandler.OnRemove)
 
-	backingImages.OnChange(ctx, backingImageControllerName, backingImageHandler.OnChanged)
+	//backingImages.OnChange(ctx, backingImageControllerName, backingImageHandler.OnChanged)
 	return nil
 }
