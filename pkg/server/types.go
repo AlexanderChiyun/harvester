@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"github.com/harvester/harvester/pkg/util"
 	"net/http"
 	"strings"
 	"time"
@@ -125,6 +126,9 @@ func New(ctx context.Context, clientConfig clientcmd.ClientConfig, options confi
 
 	ui.ConfigureAPIUI(server.steve.APIServer)
 
+	if err := util.InitBucket(util.DefaultBucket); err != nil {
+	    _ = fmt.Errorf("init oss bucket error:%s", err.Error())
+	}
 	return server, nil
 }
 

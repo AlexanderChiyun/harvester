@@ -1,28 +1,24 @@
 package util
 
 import (
-    "io"
-    "os"
-    "net/url"
     "context"
     minio "github.com/minio/minio-go/v7"
     "github.com/minio/minio-go/v7/pkg/credentials"
+    "io"
+    "net/url"
+    "os"
 )
 
 const (
-    DefaultBucket = "images"
-    bucketLocation = "us-east-1"
+    DefaultBucket   = "images"
+    DefaultPolicy   = `{"Version": "2012-10-17","Statement": [{"Action": ["s3:GetObject"],"Effect": "Allow","Principal": {"AWS": ["*"]},"Resource": ["arn:aws:s3:::images/*"],"Sid": ""}]}`
+    bucketLocation  = "us-east-1"
     accessKeyEnvKey = "OSS_ACCESS_KEY"
     secretKeyEnvKey = "OSS_SECRET_KEY"
     endpointEnvKey  = "OSS_ENDPOINT"
+
 )
-/*
-var (
-    accessKey = "minioadmin"
-    secretKey = "minioadmin"
-    endpoint = "http://10.12.21.66:9000"
-)
-*/
+
 func initCli() (*minio.Client, error) {
     accessKey := os.Getenv(accessKeyEnvKey)
     secretKey := os.Getenv(secretKeyEnvKey)
@@ -37,6 +33,7 @@ func initCli() (*minio.Client, error) {
         Secure: u.Scheme == "https",
     })
 }
+
 /*
 func initCli()  error {
     if gOSSCli != nil {
@@ -77,7 +74,13 @@ func InitBucket(bucket string) error {
     if err == nil && existed {
         return nil
     }
-    return cli.MakeBucket(context.Background(), bucket, minio.MakeBucketOptions{Region: bucketLocation})
+    if err = cli.MakeBucket(context.Background(), bucket, minio.MakeBucketOptions{Region: bucketLocation}); err != nil {
+        return err
+    }
+    if err = cli.SetBucketPolicy(context.Background(), bucket, DefaultPolicy); err != nil {
+        return err
+    }
+    return nil
 }
 
 func PutObject(bucket string, object string, reader io.Reader) (minio.UploadInfo, error) {
