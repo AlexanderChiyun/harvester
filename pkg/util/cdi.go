@@ -1,18 +1,22 @@
 package util
 
 import (
+    "time"
+    "errors"
     "context"
     "github.com/sirupsen/logrus"
-    "k8s.io/apimachinery/pkg/api/resource"
     metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
     cdiv1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
     cdi "kubevirt.io/client-go/generated/containerized-data-importer/clientset/versioned"
     corev1 "k8s.io/api/core/v1"
     "k8s.io/client-go/rest"
+    "k8s.io/apimachinery/pkg/watch"
+    "k8s.io/apimachinery/pkg/api/resource"
 )
 
 const (
     DefaultSize = "10Gi"
+    DefaultImportDuration = 10 * time.Minute
 )
 
 var DefaultMod = corev1.PersistentVolumeBlock
@@ -62,7 +66,32 @@ func CreateDataVolume(namespace, name, storageclass, imgurl string) error {
         logrus.Errorf("Init CDI client failed.")
         return err
     }
+
     _, err = cli.CdiV1beta1().DataVolumes(namespace).Create(context.Background(), newdv, metav1.CreateOptions{})
+    if err != nil {
+        return err
+    }
+
+    w, _ := cli.CdiV1beta1().DataVolumes(namespace).Watch(context.Background(), metav1.ListOptions{FieldSelector: "metadata.name="+name})
+
+    done := make(chan bool)
+    go func() {
+        for {
+            select {
+            case e, _ := <-w.ResultChan():
+                eventType := e.Type
+                eventDV := e.Object.(*cdiv1.DataVolume)
+                if eventType == watch.Modified && eventDV.Name == name && eventDV.Status.Phase == cdiv1.Succeeded {
+                    done <- true
+                }
+            case <-time.After(DefaultImportDuration):
+                err = errors.New("import timeout")
+                done <- false
+            }
+        }
+    }()
+    <-done
+
     return err
 }
 

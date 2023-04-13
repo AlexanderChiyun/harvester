@@ -26,7 +26,8 @@ var (
 	UIPath                  = NewSetting(UIPathSettingName, "/usr/share/harvester/harvester")
 	UISource                = NewSetting(UISourceSettingName, "auto") // Options are 'auto', 'external' or 'bundled'
 	UIPluginIndex           = NewSetting(UIPluginIndexSettingName, DefaultUIPluginURL)
-	VolumeSnapshotClass     = NewSetting(VolumeSnapshotClassSettingName, "longhorn")
+	//VolumeSnapshotClass     = NewSetting(VolumeSnapshotClassSettingName, "longhorn")
+        VolumeSnapshotClass     = NewSetting(VolumeSnapshotClassSettingName, "csi-rbdplugin-snapclass")
 	BackupTargetSet         = NewSetting(BackupTargetSettingName, "")
 	UpgradableVersions      = NewSetting("upgradable-versions", "")
 	UpgradeCheckerEnabled   = NewSetting("upgrade-checker-enabled", "true")

@@ -655,6 +655,21 @@ func (h *RestoreHandler) createRestoredPVC(
 	return err
 }
 
+func (h *RestoreHandler) getSnapshotHandle(volumeBackup harvesterv1.VolumeBackup) (string, error) {
+    volumeSnapshotName := *volumeBackup.Name
+    nameSpace := volumeBackup.PersistentVolumeClaim.ObjectMeta.Namespace
+    volumeSnapshot, err := h.snapshotCache.Get(nameSpace, volumeSnapshotName)
+    if err != nil {
+        return "", err
+    }
+    contentName := fmt.Sprintf("snapcontent-%s", volumeSnapshot.ObjectMeta.UID)
+    snapshotContent, err := h.snapshotContentCache.Get(contentName)
+    if err != nil {
+        return "", err
+    }
+    return *snapshotContent.Status.SnapshotHandle, nil
+}
+
 func (h *RestoreHandler) getOrCreateVolumeSnapshotContent(
 	vmRestore *harvesterv1.VirtualMachineRestore,
 	volumeBackup harvesterv1.VolumeBackup,
@@ -668,12 +683,18 @@ func (h *RestoreHandler) getOrCreateVolumeSnapshotContent(
 		return volumeSnapshotContent, nil
 	}
 
-	lhBackup, err := h.lhbackupCache.Get(util.LonghornSystemNamespaceName, *volumeBackup.LonghornBackupName)
-	if err != nil {
-		return nil, err
-	}
+	//lhBackup, err := h.lhbackupCache.Get(util.LonghornSystemNamespaceName, *volumeBackup.LonghornBackupName)
+	//if err != nil {
+        //		return nil, err
+	//}
 	// Ref: https://longhorn.io/docs/1.2.3/snapshots-and-backups/csi-snapshot-support/restore-a-backup-via-csi/#restore-a-backup-that-has-no-associated-volumesnapshot
-	snapshotHandle := fmt.Sprintf("bs://%s/%s", volumeBackup.PersistentVolumeClaim.ObjectMeta.Name, lhBackup.Name)
+	//snapshotHandle := fmt.Sprintf("bs://%s/%s", volumeBackup.PersistentVolumeClaim.ObjectMeta.Name, lhBackup.Name)
+
+	snapshotHandle, err := h.getSnapshotHandle(volumeBackup)
+        if err != nil {
+            logrus.Debugf("get snapshotHandle error, restore:%s, backup:%s.", vmRestore.Name, *volumeBackup.Name)
+            return nil, err
+        }
 
 	logrus.Debugf("create VolumeSnapshotContent %s ...", volumeSnapshotContentName)
 	return h.snapshotContents.Create(&snapshotv1.VolumeSnapshotContent{
@@ -690,8 +711,7 @@ func (h *RestoreHandler) getOrCreateVolumeSnapshotContent(
 			},
 		},
 		Spec: snapshotv1.VolumeSnapshotContentSpec{
-			Driver: "driver.longhorn.io",
-			// Use Retain policy to prevent LH Backup from being removed when users delete a VM.
+			Driver: "rook-ceph.rbd.csi.ceph.com",
 			DeletionPolicy: snapshotv1.VolumeSnapshotContentRetain,
 			Source: snapshotv1.VolumeSnapshotContentSource{
 				SnapshotHandle: pointer.StringPtr(snapshotHandle),

@@ -144,13 +144,7 @@ func (h ImageHandler) uploadImage(rw http.ResponseWriter, req *http.Request) err
 	        logrus.Debug("Upload image error:", err)
 		return err
 	}
-        logrus.Debug("Put object success:", info.Location)
-
-	err = h.updateStatusOnConflict(image, 100, info.Size, info.Location)
-	if err != nil {
-		logrus.Debug("Upate status err:", err)
-		return err
-	}
+        logrus.Debug("Upload image success:", info.Location)
 
 	storageClass := image.Annotations["harvesterhci.io/storageClassName"]
 	dvName := fmt.Sprintf("%s-%s", namespace, name)
@@ -159,7 +153,13 @@ func (h ImageHandler) uploadImage(rw http.ResponseWriter, req *http.Request) err
 		logrus.Debug("Create DV error:", err)
 		return err
 	}
-        logrus.Debug("Create DV success:", dvName)
+        logrus.Debug("Import image success, dv:", dvName)
+
+	err = h.updateStatusOnConflict(image, 100, info.Size, info.Location)
+        if err != nil {
+            logrus.Debug("Upate status err:", err)
+            return err
+        }
 
 	return nil
 }
